@@ -1,0 +1,369 @@
+local ROOT = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
+pledge("load", "fs:read=" .. ROOT .. "/*")
+package.path = ROOT .. "/?.lus;" .. package.path
+
+local toml = require("toml")
+
+local function err_of(text)
+    local ok, err = catch toml.decode(text)
+    assert(not ok, `expected an error for: $text`)
+    assert(toml.iserror(err), tostring(err))
+    return err
+end
+
+-- The example document at the start of the TOML 1.0 specification.
+local EXAMPLE = [[
+# This is a TOML document
+
+title = "TOML Example"
+
+[owner]
+name = "Tom Preston-Werner"
+dob = 1979-05-27T07:32:00-08:00
+
+[database]
+enabled = true
+ports = [ 8000, 8001, 8002 ]
+data = [ ["delta", "phi"], [3.14] ]
+temp_targets = { cpu = 79.5, case = 72.0 }
+
+[servers]
+
+[servers.alpha]
+ip = "10.0.0.1"
+role = "frontend"
+
+[servers.beta]
+ip = "10.0.0.2"
+role = "backend"
+]]
+
+local function example_test()
+    local v = toml.decode(EXAMPLE)
+    assert(v.title == "TOML Example")
+    assert(v.owner.name == "Tom Preston-Werner")
+    assert(v.owner.dob:iso() == "1979-05-27T07:32:00-08:00")
+    assert(v.database.enabled == true and v.database.ports[3] == 8002)
+    assert(v.database.data[1][2] == "phi" and v.database.data[2][1] == 3.14)
+    assert(v.database.temp_targets.case == 72.0 and math.type(v.database.temp_targets.case) == "float")
+    assert(v.servers.alpha.ip == "10.0.0.1" and v.servers.beta.role == "backend")
+end
+
+local function keys_test()
+    local v = toml.decode([[
+bare_key = "value"
+bare-key = "value"
+1234 = "value"
+"127.0.0.1" = "value"
+"character encoding" = "value"
+'quoted "value"' = "value"
+physical.color = "orange"
+physical.shape = "round"
+site."google.com" = true
+]])
+    assert(v["bare-key"] == "value" and v["1234"] == "value" and v["127.0.0.1"] == "value")
+    assert(v['quoted "value"'] == "value")
+    assert(v.physical.color == "orange" and v.physical.shape == "round")
+    assert(v.site["google.com"] == true)
+end
+
+local function strings_test()
+    local v = toml.decode([==[
+str = "I'm a string. \"You can quote me\". Name\tJos\u00E9\nLocation\tSF."
+str1 = """
+Roses are red
+Violets are blue"""
+str3 = """\
+       The quick brown \
+       fox jumps over \
+       the lazy dog.\
+       """
+str4 = """Here are two quotation marks: "". Simple enough."""
+str5 = """Here are three quotation marks: ""\"."""
+str7 = """"This," she said, "is just a pointless statement.""""
+winpath = 'C:\Users\nodejs\templates'
+quoted = 'Tom "Dubs" Preston-Werner'
+regex2 = '''I [dw]on't need \d{2} apples'''
+lines = '''
+The first newline is
+trimmed in raw strings.
+   All other whitespace
+   is preserved.
+'''
+]==])
+    assert(v.str == "I'm a string. \"You can quote me\". Name\tJosé\nLocation\tSF.")
+    assert(v.str1 == "Roses are red\nViolets are blue")
+    assert(v.str3 == "The quick brown fox jumps over the lazy dog.")
+    assert(v.str4 == 'Here are two quotation marks: "". Simple enough.')
+    assert(v.str5 == 'Here are three quotation marks: """.')
+    assert(v.str7 == '"This," she said, "is just a pointless statement."')
+    assert(v.winpath == "C:\\Users\\nodejs\\templates")
+    assert(v.quoted == 'Tom "Dubs" Preston-Werner')
+    assert(v.regex2 == "I [dw]on't need \\d{2} apples")
+    assert(v.lines == "The first newline is\ntrimmed in raw strings.\n   All other whitespace\n   is preserved.\n")
+end
+
+local function numbers_test()
+    local v = toml.decode([[
+int1 = +99
+int2 = 42
+int3 = 0
+int4 = -17
+int5 = 1_000
+hex1 = 0xDEADBEEF
+hex3 = 0xdead_beef
+oct1 = 0o01234567
+bin1 = 0b11010110
+flt1 = +1.0
+flt2 = 3.1415
+flt3 = -0.01
+flt4 = 5e+22
+flt5 = 1e06
+flt6 = -2E-2
+flt7 = 6.626e-34
+flt8 = 224_617.445_991_228
+sf1 = inf
+sf2 = +inf
+sf3 = -inf
+sf4 = nan
+]])
+    assert(v.int1 == 99 and v.int4 == -17 and v.int5 == 1000 and math.type(v.int2) == "integer")
+    assert(v.hex1 == 0xDEADBEEF and v.hex3 == 0xDEADBEEF and v.oct1 == 342391 and v.bin1 == 214)
+    assert(math.type(v.flt1) == "float" and v.flt1 == 1.0)
+    assert(v.flt2 == 3.1415 and v.flt4 == 5e22 and v.flt5 == 1e6 and v.flt6 == -0.02)
+    assert(v.flt8 == 224617.445991228)
+    assert(v.sf1 == math.huge and v.sf2 == math.huge and v.sf3 == -math.huge and v.sf4 ~= v.sf4)
+end
+
+local function datetimes_test()
+    local v = toml.decode([[
+odt1 = 1979-05-27T07:32:00Z
+odt2 = 1979-05-27T00:32:00-07:00
+odt3 = 1979-05-27T00:32:00.999999-07:00
+odt4 = 1979-05-27 07:32:00Z
+ldt1 = 1979-05-27T07:32:00
+ldt2 = 1979-05-27T00:32:00.999999
+ld1 = 1979-05-27
+lt1 = 07:32:00
+lt2 = 00:32:00.999999
+]])
+    assert(v.odt1:iso() == "1979-05-27T07:32:00Z" and v.odt1:epoch() == 296638320)
+    assert(v.odt2:iso() == "1979-05-27T00:32:00-07:00" and v.odt2.offset == -25200)
+    assert(v.odt3.nanosecond == 999999000)
+    assert(v.odt4 == v.odt1)
+    assert(v.ldt1.kind == "datetime" and tostring(v.ldt1) == "1979-05-27T07:32:00")
+    assert(tostring(v.ldt2) == "1979-05-27T00:32:00.999999")
+    assert(v.ld1.kind == "date" and tostring(v.ld1) == "1979-05-27")
+    assert(v.lt1.kind == "time" and tostring(v.lt1) == "07:32:00")
+    assert(v.lt2.nanosecond == 999999000)
+end
+
+local function arrays_test()
+    local v = toml.decode([[
+integers = [ 1, 2, 3 ]
+nested_mixed_array = [ [ 1, 2 ], ["a", "b", "c"] ]
+string_array = [ "all", 'strings', """are the same""", '''type''' ]
+numbers = [ 0.1, 0.2, 0.5, 1, 2, 5 ]
+contributors = [
+  "Foo Bar <foo@example.com>",
+  { name = "Baz Qux", email = "bazqux@example.com", url = "https://example.com/bazqux" }
+]
+integers3 = [
+  1,
+  2, # this is ok
+]
+empty = []
+]])
+    assert(v.integers[3] == 3 and v.nested_mixed_array[2][3] == "c")
+    assert(v.string_array[3] == "are the same" and v.string_array[4] == "type")
+    assert(math.type(v.numbers[4]) == "integer" and v.numbers[1] == 0.1)
+    assert(v.contributors[2].name == "Baz Qux")
+    assert(#v.integers3 == 2 and #v.empty == 0)
+end
+
+local function tables_test()
+    local v = toml.decode([[
+[table-1]
+key1 = "some string"
+
+[dog."tater.man"]
+type.name = "pug"
+
+[ j . "ʞ" . 'l' ]
+x = 1
+
+# [x] you don't need these
+[x.y.z.w]
+a = 1
+[x]
+b = 2
+
+[fruit]
+apple.color = "red"
+apple.taste.sweet = true
+]])
+    assert(v["table-1"].key1 == "some string")
+    assert(v.dog["tater.man"].type.name == "pug")
+    assert(v.j["ʞ"].l.x == 1)
+    assert(v.x.y.z.w.a == 1 and v.x.b == 2)
+    assert(v.fruit.apple.taste.sweet == true)
+end
+
+local function inline_tables_test()
+    local v = toml.decode([[
+name = { first = "Tom", last = "Preston-Werner" }
+point = { x = 1, y = 2 }
+animal = { type.name = "pug" }
+]])
+    assert(v.name.last == "Preston-Werner" and v.point.y == 2 and v.animal.type.name == "pug")
+end
+
+local function array_of_tables_test()
+    local v = toml.decode([==[
+[[products]]
+name = "Hammer"
+sku = 738594937
+
+[[products]]  # empty table within the array
+
+[[products]]
+name = "Nail"
+sku = 284758393
+color = "gray"
+
+[[fruits]]
+name = "apple"
+
+[fruits.physical]
+color = "red"
+shape = "round"
+
+[[fruits.varieties]]
+name = "red delicious"
+
+[[fruits.varieties]]
+name = "granny smith"
+
+[[fruits]]
+name = "banana"
+
+[[fruits.varieties]]
+name = "plantain"
+]==])
+    assert(#v.products == 3 and v.products[1].name == "Hammer" and next(v.products[2]) == nil)
+    assert(v.products[3].color == "gray")
+    assert(v.fruits[1].physical.color == "red")
+    assert(v.fruits[1].varieties[2].name == "granny smith")
+    assert(v.fruits[2].varieties[1].name == "plantain")
+end
+
+local function invalid_documents_test()
+    local cases = {
+        "key = # INVALID",
+        "first = \"Tom\" last = \"Preston-Werner\"",
+        "= \"no key name\"",
+        "name = \"Tom\"\nname = \"Pradyun\"",
+        "spelling = \"favorite\"\n\"spelling\" = \"favourite\"",
+        "fruit.apple = 1\nfruit.apple.smooth = true",
+        "[fruit]\napple = \"red\"\n\n[fruit]\norange = \"orange\"",
+        "[fruit]\napple = \"red\"\n\n[fruit.apple]\ntexture = \"smooth\"",
+        "[fruit]\napple.color = \"red\"\n\n[fruit.apple]\ntexture = \"smooth\"",
+        "[product]\ntype = { name = \"Nail\" }\ntype.edible = false",
+        "[product]\ntype.name = \"Nail\"\ntype = { edible = false }",
+        "fruits = []\n\n[[fruits]]\nx = 1",
+        "[[fruits]]\nname = \"apple\"\n\n[fruits]\nx = 1",
+        "int = 012",
+        "int = 1__2",
+        "int = _1",
+        "flt = .7",
+        "flt = 7.",
+        "flt = 3.e+20",
+        "str = \"bad \\q escape\"",
+        "str = \"open",
+        "a = { x = 1, }",
+        "a = 1979-13-01",
+        "a = 1979-02-30",
+        "a = 25:00:00",
+        "a = 9223372036854775808",
+        "[a]]\n",
+        "a = \"\\uD800\"",
+    }
+    for _, text in ipairs(cases) do
+        err_of(text)
+    end
+    local e = err_of("a = 1\nb = 2\na = 3\n")
+    assert(e.line == 3 and e.message == "toml: line 3: duplicate key 'a'", e.message)
+end
+
+local function encode_test()
+    local text = toml.encode({
+        title = "Example",
+        owner = { name = "Tom", dob = time.parse("1979-05-27T07:32:00-08:00") },
+        database = { ports = { 8000, 8001 }, enabled = true, ratio = 0.5 },
+        servers = { { name = "alpha", ip = "10.0.0.1" }, { name = "beta", ip = "10.0.0.2" } },
+        ["key with space"] = "x",
+    })
+    assert(text == [==[
+"key with space" = "x"
+title = "Example"
+
+[database]
+enabled = true
+ports = [8000, 8001]
+ratio = 0.5
+
+[owner]
+dob = 1979-05-27T07:32:00-08:00
+name = "Tom"
+
+[[servers]]
+ip = "10.0.0.1"
+name = "alpha"
+
+[[servers]]
+ip = "10.0.0.2"
+name = "beta"
+]==], text)
+end
+
+local function round_trip_test()
+    local v = toml.decode(EXAMPLE .. [[
+
+[times]
+utc = 1979-05-27T07:32:00.5Z
+local_dt = 1979-05-27T07:32:00.25
+date = 1979-05-27
+clock = 07:32:00
+str = "multi\nline \"quoted\" \u0001"
+big = 9223372036854775807
+neg_float = -1.5e-10
+whole = 3.0
+]])
+    local back = toml.decode(toml.encode(v))
+    assert(back.title == v.title and back.owner.dob:iso() == "1979-05-27T07:32:00-08:00")
+    assert(back.database.data[1][1] == "delta" and back.servers.beta.ip == "10.0.0.2")
+    assert(back.times.utc == v.times.utc and back.times.utc:nanos() == 500000000)
+    assert(back.times.local_dt == v.times.local_dt and back.times.date == v.times.date and back.times.clock == v.times.clock)
+    assert(back.times.str == v.times.str)
+    assert(back.times.big == math.maxinteger and back.times.neg_float == -1.5e-10)
+    assert(math.type(back.times.whole) == "float")
+end
+
+local function localtime_test()
+    local d = toml.localtime({ year = 2026, month = 1, day = 2 })
+    assert(d.kind == "date" and tostring(d) == "2026-01-02")
+    local t = toml.localtime({ hour = 9, minute = 5, nanosecond = 1000 })
+    assert(tostring(t) == "09:05:00.000001")
+    assert(toml.encode({ d = d }) == "d = 2026-01-02\n")
+    assert(not catch toml.localtime({}))
+end
+
+local function encode_errors_test()
+    assert(not catch toml.encode({ 1, 2 }))
+    assert(not catch toml.encode("x"))
+    local t = {}
+    t.t = t
+    assert(not catch toml.encode(t))
+    assert(not catch toml.encode({ f = print }))
+    assert(toml.encode({}) == "")
+end
