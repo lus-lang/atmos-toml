@@ -1,13 +1,13 @@
---- Reads and writes TOML 1.0.
+--- Reads and writes TOML 1.0, with offset date times as values of the `time`
+--- module.
 ---
 --- `toml.decode` reads a document into a table and `toml.encode` writes one.
---- Integers stay integers and floats stay floats. Offset date times become
---- values of the standard library `time` module, and local dates and times
---- become tables that remember their kind, so a round trip keeps every
---- value.
+--- Integers stay integers and floats stay floats. Local dates and times
+--- become tables that record their kind, so encoding a decoded document
+--- keeps every value.
 ---
 --- @package toml
---- @version 0.1.0
+--- @version 1.0.0
 --- @lus 2.0
 --- @license 0BSD
 --- @repository https://github.com/lus-lang/atmos-toml
@@ -33,7 +33,7 @@ local Local = {}
 Local.__index = Local
 
 local function pad(n, width)
-    return string.format("%0" .. width .. "d", n)
+    return string.format(`%0$(width)d`, n)
 end
 
 local function fraction(nanos)
@@ -47,7 +47,7 @@ Local.__tostring = function(v)
     local date = v.year and `$(pad(v.year, 4))-$(pad(v.month, 2))-$(pad(v.day, 2))` or nil
     local clock = v.hour and `$(pad(v.hour, 2)):$(pad(v.minute, 2)):$(pad(v.second, 2))$(fraction(v.nanosecond))` or nil
     if date and clock then
-        return date .. "T" .. clock
+        return `$(date)T$clock`
     end
     return date or clock
 end
@@ -59,10 +59,10 @@ end
 --- Returns a local date, time, or date and time.
 ---
 --- `fields` holds `year`, `month`, and `day` for a date, `hour`, `minute`,
---- `second`, and `nanosecond` for a time, or both. The result has the field
---- `kind`, which is `"date"`, `"time"`, or `"datetime"`, and `tostring`
---- writes it in the form of TOML. `toml.decode` returns these values for
---- local dates and times, and `toml.encode` writes them back.
+--- `second`, and `nanosecond` for a time, or both. The field `kind` of the
+--- result is `"date"`, `"time"`, or `"datetime"`. `tostring` writes the
+--- value in the form of TOML. `toml.decode` returns these values for local
+--- dates and times, which `toml.encode` writes back.
 --- @param fields table The fields.
 --- @return table
 function M.localtime(fields)
@@ -163,7 +163,7 @@ function Parser:escape()
     end
     if digits = c == "u" and 4 or c == "U" and 8 or nil then
         local hex = self.src:sub(self.pos, self.pos + digits - 1)
-        if not hex:match("^" .. string.rep("%x", digits) .. "$") then
+        if not hex:match(`^$(string.rep("%x", digits))\$`) then
             self:fail("invalid unicode escape")
         end
         local code = tonumber(hex, 16)
@@ -396,7 +396,7 @@ local function strip_underscores(self, text, digit_class)
     if text:find("__", 1, true) or text:match("^_") or text:match("_$") then
         self:fail("invalid underscore in a number")
     end
-    if text:find("[^" .. digit_class .. "_]") then
+    if text:find(`[^$(digit_class)_]`) then
         return nil
     end
     return (text:gsub("_", ""))
@@ -669,7 +669,7 @@ end
 ---
 --- Tables and inline tables become tables, arrays become lists, and
 --- strings, integers, floats, and booleans become the values of those types.
---- An offset date time in UTC becomes a `time` instant, and one with another
+--- An offset date time in UTC becomes a `time` instant. One with another
 --- offset becomes a `time` zoned value with that offset. Local date times,
 --- dates, and times become the tables of `toml.localtime`. A document that
 --- breaks the grammar or defines a key twice raises an error object whose
@@ -708,25 +708,27 @@ local function encode_key(k)
     if k:match("^[A-Za-z0-9_%-]+$") then
         return k
     end
-    return '"' .. k:gsub('[\\"%c]', function(c)
+    local escaped = k:gsub('[\\"%c]', function(c)
         if c == "\\" then return "\\\\" end
         if c == '"' then return '\\"' end
         if c == "\n" then return "\\n" end
         if c == "\t" then return "\\t" end
         if c == "\r" then return "\\r" end
         return string.format("\\u%04X", string.byte(c))
-    end) .. '"'
+    end)
+    return `"$escaped"`
 end
 
 local function encode_string(s)
-    return '"' .. s:gsub('[\\"%c]', function(c)
+    local escaped = s:gsub('[\\"%c]', function(c)
         if c == "\\" then return "\\\\" end
         if c == '"' then return '\\"' end
         if c == "\n" then return "\\n" end
         if c == "\t" then return "\\t" end
         if c == "\r" then return "\\r" end
         return string.format("\\u%04X", string.byte(c))
-    end) .. '"'
+    end)
+    return `"$escaped"`
 end
 
 local function is_time_value(v)
@@ -829,17 +831,17 @@ encode_inline = function(v, seen)
             parts[i] = encode_value(v[i], seen)
         end
         seen[v] = nil
-        return "[" .. table.concat(parts, ", ") .. "]"
+        return `[$(table.concat(parts, ", "))]`
     end
     if next(v) == nil then
         seen[v] = nil
         return "{}"
     end
     for _, k in ipairs(sorted_keys(v)) do
-        parts[#parts + 1] = encode_key(k) .. " = " .. encode_value(v[k], seen)
+        parts[#parts + 1] = `$(encode_key(k)) = $(encode_value(v[k], seen))`
     end
     seen[v] = nil
-    return "{ " .. table.concat(parts, ", ") .. " }"
+    return `{ $(table.concat(parts, ", ")) }`
 end
 
 local function is_array_of_tables(v)
@@ -868,7 +870,7 @@ local function encode_table(t, path, out, seen)
         elseif is_table_value(v) and not is_array(v) then
             subtables[#subtables + 1] = k
         else
-            out[#out + 1] = encode_key(k) .. " = " .. encode_value(v, seen)
+            out[#out + 1] = `$(encode_key(k)) = $(encode_value(v, seen))`
         end
     end
     for _, k in ipairs(subtables) do
@@ -876,7 +878,7 @@ local function encode_table(t, path, out, seen)
         if #out > 0 then
             out[#out + 1] = ""
         end
-        out[#out + 1] = "[" .. sub .. "]"
+        out[#out + 1] = `[$sub]`
         encode_table(t[k], sub, out, seen)
     end
     for _, k in ipairs(arrays) do
@@ -885,7 +887,7 @@ local function encode_table(t, path, out, seen)
             if #out > 0 then
                 out[#out + 1] = ""
             end
-            out[#out + 1] = "[[" .. sub .. "]]"
+            out[#out + 1] = `[[$sub]]`
             encode_table(item, sub, out, seen)
         end
     end
@@ -897,10 +899,11 @@ end
 --- Keys are sorted. Values that are not tables come first in each table,
 --- then its subtables as `[name]` sections, then its lists of tables as
 --- `[[name]]` sections. Other lists are written inline. `time` instants and
---- zoned values are written as offset date times, and the values of
---- `toml.localtime` as local ones. `nil` has no TOML form, so a list with a
---- hole cannot be written. A value that is not a table, a function, or a
---- table that contains itself raises an error.
+--- zoned values are written as offset date times. The values of
+--- `toml.localtime` are written as local ones. `nil` has no TOML form, so a
+--- list with a hole cannot be written. An error is raised for a document
+--- that is not a table with string keys, for a function or another value
+--- with no TOML form, and for a table that contains itself.
 --- @param value table The table to write.
 --- @return string
 function M.encode(value)
