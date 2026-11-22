@@ -158,12 +158,10 @@ local BASIC_ESCAPES = { b = "\b", t = "\t", n = "\n", f = "\f", r = "\r", ['"'] 
 function Parser:escape()
     local c = self:peek()
     self.pos = self.pos + 1
-    local e = BASIC_ESCAPES[c]
-    if e then
+    if e = BASIC_ESCAPES[c] then
         return e
     end
-    local digits = c == "u" and 4 or c == "U" and 8 or nil
-    if digits then
+    if digits = c == "u" and 4 or c == "U" and 8 or nil then
         local hex = self.src:sub(self.pos, self.pos + digits - 1)
         if not hex:match("^" .. string.rep("%x", digits) .. "$") then
             self:fail("invalid unicode escape")
@@ -188,8 +186,7 @@ function Parser:basic_string()
     self.pos = self.pos + 1
     local out = {}
     while true do
-        local chunk = self.src:match('^[^"\\\n]+', self.pos)
-        if chunk then
+        if chunk = self.src:match('^[^"\\\n]+', self.pos) then
             check_text(self, chunk)
             out[#out + 1] = chunk
             self.pos = self.pos + #chunk
@@ -239,8 +236,7 @@ function Parser:ml_basic_string()
             self.pos = self.pos + #quotes
             return table.concat(out)
         elseif c == "\\" then
-            local trim = self.src:match("^\\[ \t]*\r?\n", self.pos)
-            if trim then
+            if trim = self.src:match("^\\[ \t]*\r?\n", self.pos) then
                 self.pos = self.pos + #trim
                 local s = self.src:match("^[ \t\r\n]*", self.pos)
                 self.pos = self.pos + #s
@@ -342,12 +338,11 @@ local function parse_time(self, h, mi, s, frac)
 end
 
 function Parser:datetime()
-    local src, pos = self.src, self.pos
+    local src, pos from self
     local y, m, d = src:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)", pos)
     if y then
         local after = pos + 10
-        local sep_time = src:match("^[Tt ](%d%d:%d%d:%d%d)", after)
-        if sep_time then
+        if sep_time = src:match("^[Tt ](%d%d:%d%d:%d%d)", after) then
             local h, mi, s = src:match("^(%d%d):(%d%d):(%d%d)", after + 1)
             local cursor = after + 9
             local frac = src:match("^%.(%d+)", cursor)
@@ -361,7 +356,6 @@ function Parser:datetime()
             y, m, d = parse_date(self, y, m, d)
             local hh, mm, ss, nanos = parse_time(self, h, mi, s, frac)
             if offset then
-                local text = src:sub(pos, cursor + #offset - 1):gsub("^(.-)[ t]", "%1T"):gsub("z$", "Z")
                 self.pos = cursor + #offset
                 local secs = 0
                 if offset ~= "Z" and offset ~= "z" then
@@ -409,13 +403,12 @@ local function strip_underscores(self, text, digit_class)
 end
 
 function Parser:number()
-    local src, pos = self.src, self.pos
+    local src, pos from self
     local word = src:match("^[%w_%.%+%-]+", pos)
     if word == nil then
         self:fail("expected a value")
     end
-    local special = word:match("^[+-]?inf$") or word:match("^[+-]?nan$")
-    if special then
+    if special = word:match("^[+-]?inf$") or word:match("^[+-]?nan$") then
         self.pos = pos + #word
         if word:find("nan", 1, true) then
             return 0 / 0
@@ -473,8 +466,6 @@ function Parser:number()
     self.pos = pos + #word
     return tonumber(((sign .. rest):gsub("_", ""))) + 0.0
 end
-
-local INLINE = {}  -- marks inline tables, which are closed to later keys
 
 function Parser:value()
     local c = self:peek()
