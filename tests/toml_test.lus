@@ -45,7 +45,9 @@ local function example_test()
     assert(v.owner.dob:iso() == "1979-05-27T07:32:00-08:00")
     assert(v.database.enabled == true and v.database.ports[3] == 8002)
     assert(v.database.data[1][2] == "phi" and v.database.data[2][1] == 3.14)
-    assert(v.database.temp_targets.case == 72.0 and math.type(v.database.temp_targets.case) == "float")
+    assert(
+        v.database.temp_targets.case == 72.0 and math.type(v.database.temp_targets.case) == "float"
+    )
     assert(v.servers.alpha.ip == "10.0.0.1" and v.servers.beta.role == "backend")
 end
 
@@ -100,7 +102,10 @@ trimmed in raw strings.
     assert(v.winpath == "C:\\Users\\nodejs\\templates")
     assert(v.quoted == 'Tom "Dubs" Preston-Werner')
     assert(v.regex2 == "I [dw]on't need \\d{2} apples")
-    assert(v.lines == "The first newline is\ntrimmed in raw strings.\n   All other whitespace\n   is preserved.\n")
+    assert(
+        v.lines
+            == "The first newline is\ntrimmed in raw strings.\n   All other whitespace\n   is preserved.\n"
+    )
 end
 
 local function numbers_test()
@@ -288,9 +293,11 @@ local function invalid_documents_test()
         "[a]]\n",
         "a = \"\\uD800\"",
     }
+
     for _, text in ipairs(cases) do
         err_of(text)
     end
+
     local e = err_of("a = 1\nb = 2\na = 3\n")
     assert(e.line == 3 and e.message == "toml: line 3: duplicate key 'a'", e.message)
 end
@@ -343,7 +350,11 @@ whole = 3.0
     assert(back.title == v.title and back.owner.dob:iso() == "1979-05-27T07:32:00-08:00")
     assert(back.database.data[1][1] == "delta" and back.servers.beta.ip == "10.0.0.2")
     assert(back.times.utc == v.times.utc and back.times.utc:nanos() == 500000000)
-    assert(back.times.local_dt == v.times.local_dt and back.times.date == v.times.date and back.times.clock == v.times.clock)
+    assert(
+        back.times.local_dt == v.times.local_dt
+            and back.times.date == v.times.date
+            and back.times.clock == v.times.clock
+    )
     assert(back.times.str == v.times.str)
     assert(back.times.big == math.maxinteger and back.times.neg_float == -1.5e-10)
     assert(math.type(back.times.whole) == "float")

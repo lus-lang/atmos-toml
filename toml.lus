@@ -6,6 +6,20 @@
 --- become tables that record their kind, so encoding a decoded document
 --- keeps every value.
 ---
+--- The following example reads a server configuration, then writes the
+--- settings of a blog.
+---
+--- ```lus nocheck
+--- local toml = require("https://atmosp.here/2.0/toml.lus")
+---
+--- local config = toml.decode("[server]\nport = 8080\nstarted = 2026-07-02T09:15:00Z\n")
+--- print(config.server.port)  --> 8080
+--- print(config.server.started:iso())  --> 2026-07-02T09:15:00Z
+--- print(toml.encode({ title = "Field notes", tags = { "travel", "food" } }))
+--- --> tags = ["travel", "food"]
+--- --> title = "Field notes"
+--- ```
+---
 --- @package toml
 --- @version 1.0.0
 --- @lus 2.0
@@ -16,7 +30,10 @@ local M = {}
 
 local TomlError = {}
 TomlError.__index = TomlError
-TomlError.__tostring = function(e) return e.message end
+
+TomlError.__tostring = function(e)
+    return e.message
+end
 
 --- Returns true if `value` is an error object that `decode` raised.
 ---
@@ -40,15 +57,20 @@ local function fraction(nanos)
     if nanos == nil or nanos == 0 then
         return ""
     end
+
     return "." .. (pad(nanos, 9):gsub("0+$", ""))
 end
 
 Local.__tostring = function(v)
     local date = v.year and `$(pad(v.year, 4))-$(pad(v.month, 2))-$(pad(v.day, 2))` or nil
-    local clock = v.hour and `$(pad(v.hour, 2)):$(pad(v.minute, 2)):$(pad(v.second, 2))$(fraction(v.nanosecond))` or nil
+    local clock = v.hour
+        and `$(pad(v.hour, 2)):$(pad(v.minute, 2)):$(pad(v.second, 2))$(fraction(v.nanosecond))`
+        or nil
+
     if date and clock then
         return `$(date)T$clock`
     end
+
     return date or clock
 end
 
@@ -66,10 +88,8 @@ end
 --- @param fields table The fields.
 --- @return table
 function M.localtime(fields)
-    local v = {}
-    for k, x in pairs(fields) do
-        v[k] = x
-    end
+    local v = table.clone(fields)
+
     if v.year and v.hour then
         v.kind = "datetime"
     elseif v.year then
@@ -79,6 +99,7 @@ function M.localtime(fields)
     else
         error("toml.localtime: fields need a date, a time, or both", 2)
     end
+
     v.second = v.hour and (v.second or 0) or nil
     v.nanosecond = v.hour and (v.nanosecond or 0) or nil
     return setmetatable(v, Local)
@@ -96,9 +117,11 @@ Parser.__index = Parser
 function Parser:fail(message, pos)
     local line = 1
     local stop = pos or self.pos
+
     for _ in self.src:sub(1, stop - 1):gmatch("\n") do
         line = line + 1
     end
+
     error(setmetatable({ line = line, message = `toml: line $line: $message` }, TomlError), 0)
 end
 
@@ -116,6 +139,7 @@ function Parser:wsnl()
     while true do
         self:ws()
         local c = self:peek()
+
         if c == "#" then
             self:comment()
         elseif c == "\n" then
@@ -131,19 +155,23 @@ end
 function Parser:comment()
     local text = self.src:match("^#[^\n]*", self.pos)
     local body = text:gsub("\r$", "")
+
     if body:find("[%z\1-\8\11-\31\127]") then
         self:fail("control character in a comment")
     end
+
     self.pos = self.pos + #text
 end
 
 function Parser:line_end()
     self:ws()
     local c = self:peek()
+
     if c == "#" then
         self:comment()
         c = self:peek()
     end
+
     if c == "\n" then
         self.pos = self.pos + 1
     elseif self:peek(2) == "\r\n" then
@@ -153,26 +181,49 @@ function Parser:line_end()
     end
 end
 
-local BASIC_ESCAPES = { b = "\b", t = "\t", n = "\n", f = "\f", r = "\r", ['"'] = '"', ["\\"] = "\\" }
+local UNICODE_DIGITS = { u = 4, U = 8 }
+
+local RADIXES = {
+    x = { class = "%x", base = 16 },
+    o = { class = "0-7", base = 8 },
+    b = { class = "01", base = 2 },
+}
+
+local BASIC_ESCAPES = {
+    b = "\b",
+    t = "\t",
+    n = "\n",
+    f = "\f",
+    r = "\r",
+    ['"'] = '"',
+    ["\\"] = "\\",
+}
 
 function Parser:escape()
     local c = self:peek()
     self.pos = self.pos + 1
+
     if e = BASIC_ESCAPES[c] then
         return e
     end
-    if digits = c == "u" and 4 or c == "U" and 8 or nil then
+
+    if digits = UNICODE_DIGITS[c] then
         local hex = self.src:sub(self.pos, self.pos + digits - 1)
+
         if not hex:match(`^$(string.rep("%x", digits))\$`) then
             self:fail("invalid unicode escape")
         end
+
         local code = tonumber(hex, 16)
+
         if code > 0x10FFFF or (code >= 0xD800 and code <= 0xDFFF) then
             self:fail("unicode escape is not a scalar value")
         end
+
         self.pos = self.pos + digits
-        return utf8.char(code)
+        return string.char(code)
     end
+
     self:fail(`invalid escape '\\$c'`)
 end
 
@@ -185,13 +236,16 @@ end
 function Parser:basic_string()
     self.pos = self.pos + 1
     local out = {}
+
     while true do
         if chunk = self.src:match('^[^"\\\n]+', self.pos) then
             check_text(self, chunk)
             out[#out + 1] = chunk
             self.pos = self.pos + #chunk
         end
+
         local c = self:peek()
+
         if c == '"' then
             self.pos = self.pos + 1
             return table.concat(out)
@@ -206,9 +260,11 @@ end
 
 function Parser:literal_string()
     local text = self.src:match("^'([^'\n]*)'", self.pos)
+
     if text == nil then
         self:fail("unterminated literal string")
     end
+
     check_text(self, text:gsub("\t", ""))
     self.pos = self.pos + #text + 2
     return text
@@ -216,22 +272,28 @@ end
 
 function Parser:ml_basic_string()
     self.pos = self.pos + 3
+
     if self:peek() == "\n" then
         self.pos = self.pos + 1
     elseif self:peek(2) == "\r\n" then
         self.pos = self.pos + 2
     end
+
     local out = {}
+
     while true do
         local c = self:peek()
+
         if c == "" then
             self:fail("unterminated multi-line string")
         elseif self:peek(3) == '"""' then
             -- Up to two quotes may end the content before the delimiter.
             local quotes = self.src:match('^"+', self.pos)
+
             if #quotes > 5 then
                 self:fail("too many quotes")
             end
+
             out[#out + 1] = string.rep('"', #quotes - 3)
             self.pos = self.pos + #quotes
             return table.concat(out)
@@ -251,6 +313,7 @@ function Parser:ml_basic_string()
             if c ~= "\n" and c ~= "\t" and c:find("[%z\1-\31\127]") then
                 self:fail("control character in a string")
             end
+
             out[#out + 1] = c
             self.pos = self.pos + 1
         end
@@ -259,44 +322,58 @@ end
 
 function Parser:ml_literal_string()
     self.pos = self.pos + 3
+
     if self:peek() == "\n" then
         self.pos = self.pos + 1
     elseif self:peek(2) == "\r\n" then
         self.pos = self.pos + 2
     end
+
     local stop = self.src:find("'''", self.pos, true)
+
     if stop == nil then
         self:fail("unterminated multi-line literal string")
     end
+
     local quotes = self.src:match("^'+", stop)
+
     if #quotes > 5 then
         self:fail("too many quotes")
     end
+
     local text = self.src:sub(self.pos, stop - 1) .. string.rep("'", #quotes - 3)
+
     if text:gsub("\r\n", "\n"):find("[%z\1-\8\11-\31\127]") then
         self:fail("control character in a string")
     end
+
     self.pos = stop + #quotes
     return (text:gsub("\r\n", "\n"))
 end
 
 function Parser:key_part()
     local c = self:peek()
+
     if c == '"' then
         if self:peek(3) == '"""' then
             self:fail("a key cannot be a multi-line string")
         end
+
         return self:basic_string()
     elseif c == "'" then
         if self:peek(3) == "'''" then
             self:fail("a key cannot be a multi-line string")
         end
+
         return self:literal_string()
     end
+
     local bare = self.src:match("^[A-Za-z0-9_%-]+", self.pos)
+
     if bare == nil then
         self:fail("expected a key")
     end
+
     self.pos = self.pos + #bare
     return bare
 end
@@ -304,10 +381,12 @@ end
 -- Reads a dotted key and returns its parts.
 function Parser:key()
     local parts = {}
+
     while true do
         self:ws()
         parts[#parts + 1] = self:key_part()
         self:ws()
+
         if self:peek() == "." then
             self.pos = self.pos + 1
         else
@@ -318,77 +397,127 @@ end
 
 local function parse_date(self, y, m, d)
     y, m, d = tonumber(y), tonumber(m), tonumber(d)
-    local days = { 31, (y % 4 == 0 and (y % 100 ~= 0 or y % 400 == 0)) and 29 or 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+    local days = {
+        31,
+        (y % 4 == 0 and (y % 100 ~= 0 or y % 400 == 0)) and 29 or 28,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    }
+
     if m < 1 or m > 12 or d < 1 or d > days[m] then
         self:fail("invalid date")
     end
+
     return y, m, d
 end
 
 local function parse_time(self, h, mi, s, frac)
     h, mi, s = tonumber(h), tonumber(mi), tonumber(s)
+
     if h > 23 or mi > 59 or s > 60 then
         self:fail("invalid time")
     end
+
     local nanos = 0
+
     if frac and frac ~= "" then
         nanos = math.tointeger(tonumber((frac .. "000000000"):sub(1, 9)))
     end
+
     return h, mi, s, nanos
 end
 
 function Parser:datetime()
     local src, pos from self
-    local y, m, d = src:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)", pos)
-    if y then
+
+    if y, m, d = src:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)", pos) then
         local after = pos + 10
-        if sep_time = src:match("^[Tt ](%d%d:%d%d:%d%d)", after) then
-            local h, mi, s = src:match("^(%d%d):(%d%d):(%d%d)", after + 1)
+
+        if h, mi, s = src:match("^[Tt ](%d%d):(%d%d):(%d%d)", after) then
             local cursor = after + 9
             local frac = src:match("^%.(%d+)", cursor)
+
             if src:sub(cursor, cursor) == "." and frac == nil then
                 self:fail("invalid fractional seconds")
             end
+
             if frac then
                 cursor = cursor + #frac + 1
             end
+
             local offset = src:match("^[Zz]", cursor) or src:match("^[+-]%d%d:%d%d", cursor)
             y, m, d = parse_date(self, y, m, d)
             local hh, mm, ss, nanos = parse_time(self, h, mi, s, frac)
+
             if offset then
                 self.pos = cursor + #offset
                 local secs = 0
+
                 if offset ~= "Z" and offset ~= "z" then
                     local sign, oh, om = offset:match("^([+-])(%d%d):(%d%d)$")
+
                     if tonumber(oh) > 23 or tonumber(om) > 59 then
                         self:fail("invalid offset")
                     end
+
                     secs = (tonumber(oh) * 3600 + tonumber(om) * 60) * (sign == "-" and -1 or 1)
                 end
-                local base = time.zoned({ year = y, month = m, day = d, hour = hh, minute = mm, second = math.min(ss, 59), nanosecond = nanos }, secs)
+
+                local base = time.zoned({
+                    year = y,
+                    month = m,
+                    day = d,
+                    hour = hh,
+                    minute = mm,
+                    second = math.min(ss, 59),
+                    nanosecond = nanos,
+                }, secs)
+
                 if secs == 0 and (offset == "Z" or offset == "z") then
                     return base:instant()
                 end
+
                 return base
             end
+
             self.pos = cursor
-            return M.localtime({ year = y, month = m, day = d, hour = hh, minute = mm, second = ss, nanosecond = nanos })
+            return M.localtime({
+                year = y,
+                month = m,
+                day = d,
+                hour = hh,
+                minute = mm,
+                second = ss,
+                nanosecond = nanos,
+            })
         end
+
         self.pos = after
         y, m, d = parse_date(self, y, m, d)
         return M.localtime({ year = y, month = m, day = d })
     end
-    local h, mi, s = src:match("^(%d%d):(%d%d):(%d%d)", pos)
-    if h then
+
+    if h, mi, s = src:match("^(%d%d):(%d%d):(%d%d)", pos) then
         local cursor = pos + 8
         local frac = src:match("^%.(%d+)", cursor)
+
         if frac then
             cursor = cursor + #frac + 1
         end
+
         self.pos = cursor
         local hh, mm, ss, nanos = parse_time(self, h, mi, s, frac)
         return M.localtime({ hour = hh, minute = mm, second = ss, nanosecond = nanos })
     end
+
     return nil
 end
 
@@ -396,88 +525,124 @@ local function strip_underscores(self, text, digit_class)
     if text:find("__", 1, true) or text:match("^_") or text:match("_$") then
         self:fail("invalid underscore in a number")
     end
+
     if text:find(`[^$(digit_class)_]`) then
         return nil
     end
+
     return (text:gsub("_", ""))
 end
 
 function Parser:number()
     local src, pos from self
     local word = src:match("^[%w_%.%+%-]+", pos)
+
     if word == nil then
         self:fail("expected a value")
     end
+
     if special = word:match("^[+-]?inf$") or word:match("^[+-]?nan$") then
         self.pos = pos + #word
+
         if word:find("nan", 1, true) then
             return 0 / 0
         end
+
         return word:sub(1, 1) == "-" and -math.huge or math.huge
     end
+
     local prefix, digits = word:match("^0([xob])(.+)$")
+
     if prefix then
-        local class = prefix == "x" and "%x" or prefix == "o" and "0-7" or "01"
+        local class, base from RADIXES[prefix]
         local clean = strip_underscores(self, digits, class)
+
         if clean == nil then
             self:fail(`invalid number '$word'`)
         end
-        local n = math.tointeger(tonumber(clean, prefix == "x" and 16 or prefix == "o" and 8 or 2))
+
+        local n = math.tointeger(tonumber(clean, base))
+
         if n == nil then
             self:fail("integer out of range")
         end
+
         self.pos = pos + #word
         return n
     end
+
     local sign, rest = word:match("^([+-]?)(.*)$")
     local int_part = rest:match("^[%d_]+")
+
     if int_part == nil then
         self:fail(`invalid value '$word'`)
     end
+
     if int_part:match("^0%d") or int_part:match("^0_") then
         self:fail("leading zeros are not allowed")
     end
+
     local is_float = rest:find("[%.eE]") ~= nil
+
     if not is_float then
         local clean = strip_underscores(self, rest, "%d")
+
         if clean == nil then
             self:fail(`invalid value '$word'`)
         end
+
         local n = math.tointeger(tonumber(sign .. clean))
+
         if n == nil then
             self:fail("integer out of range")
         end
+
         self.pos = pos + #word
         return n
     end
+
     local ip, fp, ep = rest:match("^([%d_]+)%.([%d_]+)([eE][+-]?[%d_]+)$")
+
     if ip == nil then
         ip, fp = rest:match("^([%d_]+)%.([%d_]+)$")
     end
+
     if ip == nil then
         ip, ep = rest:match("^([%d_]+)([eE][+-]?[%d_]+)$")
     end
+
     if ip == nil then
         self:fail(`invalid float '$word'`)
     end
+
     strip_underscores(self, ip, "%d")
-    if fp then strip_underscores(self, fp, "%d") end
-    if ep then strip_underscores(self, ep:gsub("^[eE][+-]?", ""), "%d") end
+
+    if fp then
+        strip_underscores(self, fp, "%d")
+    end
+
+    if ep then
+        strip_underscores(self, ep:gsub("^[eE][+-]?", ""), "%d")
+    end
+
     self.pos = pos + #word
     return tonumber(((sign .. rest):gsub("_", ""))) + 0.0
 end
 
 function Parser:value()
     local c = self:peek()
+
     if c == '"' then
         if self:peek(3) == '"""' then
             return self:ml_basic_string()
         end
+
         return self:basic_string()
     elseif c == "'" then
         if self:peek(3) == "'''" then
             return self:ml_literal_string()
         end
+
         return self:literal_string()
     elseif c == "t" and self.src:match("^true", self.pos) then
         self.pos = self.pos + 4
@@ -489,17 +654,21 @@ function Parser:value()
         self.pos = self.pos + 1
         local out = {}
         local n = 0
+
         while true do
             self:wsnl()
+
             if self:peek() == "]" then
                 self.pos = self.pos + 1
                 self.static[out] = true
                 return out
             end
+
             n = n + 1
             out[n] = self:value()
             self:wsnl()
             local d = self:peek()
+
             if d == "," then
                 self.pos = self.pos + 1
             elseif d ~= "]" then
@@ -511,24 +680,30 @@ function Parser:value()
         local out = {}
         self.inline[out] = true
         self:ws()
+
         if self:peek() == "}" then
             self.pos = self.pos + 1
             return out
         end
+
         while true do
             local parts = self:key()
+
             if self:peek() ~= "=" then
                 self:fail("expected '=' after a key")
             end
+
             self.pos = self.pos + 1
             self:ws()
             local v = self:value()
             self:assign(out, parts, v, true)
             self:ws()
             local d = self:peek()
+
             if d == "," then
                 self.pos = self.pos + 1
                 self:ws()
+
                 if self:peek() == "}" then
                     self:fail("trailing comma in an inline table")
                 end
@@ -540,10 +715,11 @@ function Parser:value()
             end
         end
     end
-    local dt = self:datetime()
-    if dt ~= nil then
+
+    if dt = self:datetime() then
         return dt
     end
+
     return self:number()
 end
 
@@ -552,45 +728,61 @@ end
 -- header may not define them again.
 function Parser:assign(base, parts, value, in_inline)
     local t = base
+
     for i = 1, #parts - 1 do
         local k = parts[i]
         local nxt = t[k]
+
         if nxt == nil then
             nxt = {}
             t[k] = nxt
             self.dotted[nxt] = true
-        elseif type(nxt) ~= "table" or self.static[nxt] or (self.inline[nxt] and not in_inline) or self.defined[nxt] and not self.dotted[nxt] then
+        elseif type(nxt) ~= "table"
+            or self.static[nxt]
+            or (self.inline[nxt] and not in_inline)
+            or self.defined[nxt] and not self.dotted[nxt] then
             self:fail(`cannot add keys to '$k'`)
         end
+
         t = nxt
     end
+
     local last = parts[#parts]
+
     if t[last] ~= nil then
         self:fail(`duplicate key '$last'`)
     end
+
     t[last] = value
 end
 
 function Parser:document()
     local root = {}
     local current = root
+
     while true do
         self:wsnl()
+
         if self.pos > #self.src then
             return root
         end
+
         if self:peek(2) == "[[" then
             self.pos = self.pos + 2
             local parts = self:key()
+
             if self:peek(2) ~= "]]" then
                 self:fail("expected ']]'")
             end
+
             self.pos = self.pos + 2
             self:line_end()
             local t = root
+
             for i = 1, #parts - 1 do
                 local k = parts[i]
                 local nxt = t[k]
+
                 if nxt == nil then
                     nxt = {}
                     t[k] = nxt
@@ -598,13 +790,17 @@ function Parser:document()
                 elseif type(nxt) ~= "table" or self.inline[nxt] or self.static[nxt] then
                     self:fail(`cannot add a table to '$k'`)
                 end
+
                 if self.arrays[nxt] then
                     nxt = nxt[#nxt]
                 end
+
                 t = nxt
             end
+
             local last = parts[#parts]
             local arr = t[last]
+
             if arr == nil then
                 arr = {}
                 t[last] = arr
@@ -612,52 +808,68 @@ function Parser:document()
             elseif not self.arrays[arr] then
                 self:fail(`'$last' is not an array of tables`)
             end
+
             current = {}
             self.defined[current] = true
             arr[#arr + 1] = current
         elseif self:peek() == "[" then
             self.pos = self.pos + 1
             local parts = self:key()
+
             if self:peek() ~= "]" then
                 self:fail("expected ']'")
             end
+
             self.pos = self.pos + 1
             self:line_end()
             local t = root
+
             for i = 1, #parts do
                 local k = parts[i]
                 local nxt = t[k]
+
                 if nxt == nil then
                     nxt = {}
                     t[k] = nxt
+
                     if i < #parts then
                         self.implicit[nxt] = true
                     end
                 elseif type(nxt) ~= "table" or self.inline[nxt] or self.static[nxt] then
                     self:fail(`cannot define '$k' as a table`)
                 elseif i == #parts then
-                    if self.arrays[nxt] or self.dotted[nxt] or (self.defined[nxt] and not self.implicit[nxt]) then
+                    if self.arrays[nxt]
+                        or self.dotted[nxt]
+                        or (self.defined[nxt] and not self.implicit[nxt]) then
                         self:fail(`table '$(table.concat(parts, "."))' is defined twice`)
                     end
+
                     self.implicit[nxt] = nil
                 end
+
                 if i < #parts and self.arrays[nxt] then
                     nxt = nxt[#nxt]
                 end
+
                 t = nxt
             end
+
             self.defined[t] = true
             current = t
         else
             local parts = self:key()
+
             if self:peek() ~= "=" then
                 self:fail("expected '=' after a key")
             end
+
             self.pos = self.pos + 1
             self:ws()
+
             if self:peek() == "" or self:peek() == "\n" then
                 self:fail("expected a value")
             end
+
             local v = self:value()
             self:assign(current, parts, v, false)
             self:line_end()
@@ -680,8 +892,10 @@ function M.decode(text)
     if text:find("^\u{FEFF}") then
         text = text:sub(2)
     end
+
     local p = setmetatable({
-        src = text, pos = 1,
+        src = text,
+        pos = 1,
         inline = setmetatable({}, { __mode = "k" }),
         static = setmetatable({}, { __mode = "k" }),
         dotted = setmetatable({}, { __mode = "k" }),
@@ -690,55 +904,59 @@ function M.decode(text)
         arrays = setmetatable({}, { __mode = "k" }),
     }, Parser)
     local ok, result = catch p:document()
+
     if not ok then
         if getmetatable(result) == TomlError then
             error(result, 2)
         end
+
         error(result, 0)
     end
+
     return result
 end
 
 -- Encoding ---------------------------------------------------------------------------
 
+local STRING_ESCAPES = {
+    ["\\"] = "\\\\",
+    ['"'] = '\\"',
+    ["\n"] = "\\n",
+    ["\t"] = "\\t",
+    ["\r"] = "\\r",
+}
+
+local function encode_string(s)
+    local escaped = s:gsub('[\\"%c]', function(c)
+        return STRING_ESCAPES[c] or string.format("\\u%04X", string.byte(c))
+    end)
+
+    return `"$escaped"`
+end
+
 local function encode_key(k)
     if type(k) ~= "string" then
         k = tostring(k)
     end
+
     if k:match("^[A-Za-z0-9_%-]+$") then
         return k
     end
-    local escaped = k:gsub('[\\"%c]', function(c)
-        if c == "\\" then return "\\\\" end
-        if c == '"' then return '\\"' end
-        if c == "\n" then return "\\n" end
-        if c == "\t" then return "\\t" end
-        if c == "\r" then return "\\r" end
-        return string.format("\\u%04X", string.byte(c))
-    end)
-    return `"$escaped"`
-end
 
-local function encode_string(s)
-    local escaped = s:gsub('[\\"%c]', function(c)
-        if c == "\\" then return "\\\\" end
-        if c == '"' then return '\\"' end
-        if c == "\n" then return "\\n" end
-        if c == "\t" then return "\\t" end
-        if c == "\r" then return "\\r" end
-        return string.format("\\u%04X", string.byte(c))
-    end)
-    return `"$escaped"`
+    return encode_string(k)
 end
 
 local function is_time_value(v)
     local t = type(v)
+
     if t ~= "userdata" and t ~= "table" then
         return false
     end
+
     if is_local(v) then
         return true
     end
+
     local ok, iso = catch v:iso()
     return ok and type(iso) == "string"
 end
@@ -747,12 +965,16 @@ local function time_text(v)
     if is_local(v) then
         return tostring(v)
     end
+
     local iso = v:iso()
-    local nanos = (catch v:nanos()) and v:nanos() or v.nanosecond
+    local has_nanos, value = catch v:nanos()
+    local nanos = has_nanos and value or v.nanosecond
+
     if nanos and nanos > 0 then
         local frac = fraction(nanos)
         iso = iso:gsub("^(%d+%-%d+%-%d+T%d+:%d+:%d+)", "%1" .. frac)
     end
+
     return iso
 end
 
@@ -760,15 +982,19 @@ local function is_array(t)
     if is_time_value(t) then
         return false
     end
+
     local n = #t
+
     if n == 0 then
         return false
     end
+
     for k in pairs(t) do
         if math.type(k) ~= "integer" or k < 1 or k > n then
             return false
         end
     end
+
     return true
 end
 
@@ -780,6 +1006,7 @@ local encode_inline
 
 local function encode_value(v, seen)
     local t = type(v)
+
     if t == "string" then
         return encode_string(v)
     elseif t == "boolean" then
@@ -788,6 +1015,7 @@ local function encode_value(v, seen)
         if math.type(v) == "integer" then
             return tostring(v)
         end
+
         if v ~= v then
             return "nan"
         elseif v == math.huge then
@@ -795,28 +1023,38 @@ local function encode_value(v, seen)
         elseif v == -math.huge then
             return "-inf"
         end
+
         local s = string.format("%.17g", v)
+
         if tonumber(string.format("%.15g", v)) == v then
             s = string.format("%.15g", v)
         end
+
         if not s:find("[%.eEn]") then
             s = s .. ".0"
         end
+
         return s
     elseif is_time_value(v) then
         return time_text(v)
     elseif t == "table" then
         return encode_inline(v, seen)
     end
+
     error(`toml.encode: cannot encode a $t`, 0)
 end
 
 local function sorted_keys(t)
     local keys = {}
+
     for k in pairs(t) do
         keys[#keys + 1] = k
     end
-    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+
+    table.sort(keys, function(a, b)
+        return tostring(a) < tostring(b)
+    end)
+
     return keys
 end
 
@@ -824,22 +1062,28 @@ encode_inline = function(v, seen)
     if seen[v] then
         error("toml.encode: cannot encode a table that contains itself", 0)
     end
+
     seen[v] = true
     local parts = {}
+
     if is_array(v) then
         for i = 1, #v do
             parts[i] = encode_value(v[i], seen)
         end
+
         seen[v] = nil
         return `[$(table.concat(parts, ", "))]`
     end
+
     if next(v) == nil then
         seen[v] = nil
         return "{}"
     end
+
     for _, k in ipairs(sorted_keys(v)) do
         parts[#parts + 1] = `$(encode_key(k)) = $(encode_value(v[k], seen))`
     end
+
     seen[v] = nil
     return `{ $(table.concat(parts, ", ")) }`
 end
@@ -848,11 +1092,13 @@ local function is_array_of_tables(v)
     if not is_table_value(v) or not is_array(v) then
         return false
     end
+
     for _, item in ipairs(v) do
         if not is_table_value(item) or is_array(item) then
             return false
         end
     end
+
     return true
 end
 
@@ -860,11 +1106,14 @@ local function encode_table(t, path, out, seen)
     if seen[t] then
         error("toml.encode: cannot encode a table that contains itself", 0)
     end
+
     seen[t] = true
     local keys = sorted_keys(t)
     local subtables, arrays = {}, {}
+
     for _, k in ipairs(keys) do
         local v = t[k]
+
         if is_array_of_tables(v) then
             arrays[#arrays + 1] = k
         elseif is_table_value(v) and not is_array(v) then
@@ -873,24 +1122,31 @@ local function encode_table(t, path, out, seen)
             out[#out + 1] = `$(encode_key(k)) = $(encode_value(v, seen))`
         end
     end
+
     for _, k in ipairs(subtables) do
-        local sub = path .. (path == "" and "" or ".") .. encode_key(k)
+        local sub = path == "" and encode_key(k) or `$path.$(encode_key(k))`
+
         if #out > 0 then
             out[#out + 1] = ""
         end
+
         out[#out + 1] = `[$sub]`
         encode_table(t[k], sub, out, seen)
     end
+
     for _, k in ipairs(arrays) do
-        local sub = path .. (path == "" and "" or ".") .. encode_key(k)
+        local sub = path == "" and encode_key(k) or `$path.$(encode_key(k))`
+
         for _, item in ipairs(t[k]) do
             if #out > 0 then
                 out[#out + 1] = ""
             end
+
             out[#out + 1] = `[[$sub]]`
             encode_table(item, sub, out, seen)
         end
     end
+
     seen[t] = nil
 end
 
@@ -910,11 +1166,14 @@ function M.encode(value)
     if type(value) ~= "table" or is_array(value) then
         error("toml.encode: the document must be a table with string keys", 2)
     end
+
     local out = {}
     encode_table(value, "", out, {})
+
     if #out == 0 then
         return ""
     end
+
     return table.concat(out, "\n") .. "\n"
 end
 
